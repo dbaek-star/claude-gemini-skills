@@ -1,0 +1,292 @@
+---
+name: gemini-review
+description: |
+  This skill should be used when the user asks to "review code with Gemini",
+  "Gemini로 코드 리뷰", "Gemini한테 코드 검토", "AI 코드 리뷰",
+  "버그 찾아줘 Gemini", or wants Gemini to review code for bugs, performance, and style issues.
+  Provides a workflow for code review using Gemini CLI with Claude verification.
+version: 3.1.0
+allowed-tools: [Read, Write, Edit, Bash, Glob, Grep]
+---
+
+# Gemini Code Review (with Claude Verification)
+
+Gemini CLI를 호출하여 코드 리뷰를 수행하고, **Claude가 결과를 검토하여 동의/반박**하는 스킬입니다.
+
+## 핵심 변경사항 (v3.1.0)
+
+1. **모델 선택**: 기본 `gemini-3-pro-preview` 사용, 실패 시 `gemini-3-flash-preview`로 자동 전환
+2. **Claude 검토 단계**: Gemini 피드백을 그대로 전달하지 않고, Claude가 각 지적에 대해 동의/반박/부분동의 판단
+3. **검증된 결과만 전달**: 잘못된 지적이나 맥락을 모르는 피드백 필터링
+4. **메인 컨텍스트 실행**: 단일 호출로 끝나므로 Subagent 오버헤드 불필요
+
+## Gemini 모델 선택 규칙
+
+### 기본 모델
+- **Primary**: `gemini-3-pro-preview` (기본값)
+- **Fallback**: `gemini-3-flash-preview` (실패 시 자동 전환)
+
+### 호출 방식
+```bash
+# 1차 시도: gemini-3-pro-preview
+cat {파일} | gemini -m gemini-3-pro-preview -p "{프롬프트} ultrathink" -o json
+
+# 실패 시 2차 시도: gemini-3-flash-preview
+cat {파일} | gemini -m gemini-3-flash-preview -p "{프롬프트} ultrathink" -o json
+```
+
+### 프롬프트 규칙
+- 모든 Gemini 프롬프트의 마지막에 **"ultrathink"** 키워드를 반드시 포함
+
+### Fallback 판단 기준
+- exit code가 0이 아닌 경우
+- JSON 파싱 실패
+- `response` 필드가 비어있는 경우
+- 타임아웃 발생
+
+### Fallback 발생 시 사용자 알림
+모델 변경 시 **반드시** 사용자에게 알립니다:
+```
+⚠️ 모델 변경 알림: gemini-3-pro-preview 호출 실패로 gemini-3-flash-preview로 전환하여 진행합니다.
+```
+
+## 목적
+
+- 버그 및 잠재적 문제 발견
+- 성능 개선점 식별
+- 코드 스타일 및 가독성 검토
+- 보안 취약점 탐지
+- **Gemini 오류/오해 필터링**
+
+## 실행 방식
+
+메인 컨텍스트에서 직접 실행 (Subagent 불필요)
+
+```
+코드 → Gemini 리뷰 → Claude 검토 (동의/반박) → 검증된 결과 전달
+```
+
+## 작업 산출물 저장 규칙
+
+모든 파일은 **프로젝트 디렉토리 내** `.gemini/` 폴더에 저장합니다.
+
+### 저장 경로 구조
+```
+{프로젝트루트}/.gemini/review/{YYYYMMDD_HHMMSS}_{대상파일명}/
+  ├── review_input.txt           (리뷰 대상 코드)
+  ├── review_gemini.md           (Gemini 리뷰 원본)
+  ├── review_claude_decision.md  (Claude 검토 - 동의/반박/부분동의)
+  └── review_final.md            (최종 검증된 결과)
+```
+
+## Gemini CLI 호출 규칙
+
+### 모델 지정 (필수)
+- 모든 Gemini 호출에 `-m gemini-3-pro-preview` 옵션 포함
+- 실패 시 `-m gemini-3-flash-preview`로 재시도
+
+### 입력 전달
+- 코드나 긴 텍스트는 반드시 임시 파일로 작성 후 `cat` 또는 `<`로 전달
+- 지시사항은 `-p` 플래그로 전달
+- `echo "내용" | gemini` 패턴은 셸 이스케이핑 문제로 **사용 금지**
+
+### 출력 처리
+- 항상 `-o json` 플래그 사용
+- `response` 필드에서 Gemini 답변 추출
+
+### 에러 대응
+1. **1차**: `gemini-3-pro-preview`로 시도
+2. **2차**: 실패 시 `gemini-3-flash-preview`로 재시도 + 사용자 알림
+3. **3차**: 둘 다 실패 시 Claude 단독으로 코드 리뷰 수행
+
+## 워크플로우
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 1: 코드 준비                                           │
+│  - 파일 경로가 주어진 경우: Read 도구로 파일 읽기             │
+│  - 코드가 직접 제공된 경우: 그대로 사용                       │
+│  - 아무것도 주어지지 않은 경우: 사용자에게 요청               │
+│  - 출력 폴더 생성                                            │
+├─────────────────────────────────────────────────────────────┤
+│  Step 2: Gemini 리뷰 요청                                    │
+│  - 코드 → `review_input.txt` 저장                           │
+│  - Gemini CLI 호출 (-m gemini-3-pro-preview)                │
+│  - 실패 시 -m gemini-3-flash-preview로 재시도               │
+│  - Gemini 응답 → `review_gemini.md` 저장                    │
+├─────────────────────────────────────────────────────────────┤
+│  Step 3: Claude 검토 (핵심 단계)                             │
+│  - Gemini 피드백 각 항목별 검토:                             │
+│    → 동의: "타당한 지적. 수정 권장."                         │
+│    → 반박: "이 코드는 의도적임. 이유: ..."                   │
+│    → 부분동의: "일부 수용. 다른 방식 제안: ..."              │
+│  - 검토 결과 → `review_claude_decision.md` 저장             │
+├─────────────────────────────────────────────────────────────┤
+│  Step 4: 최종 결과 정리                                      │
+│  - 검증된 이슈만 포함한 최종 리포트 생성                      │
+│  - 최종 결과 → `review_final.md` 저장                       │
+│  - 사용자에게 결과 전달                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 실행 절차
+
+### Step 1: 코드 준비 및 출력 폴더 생성
+- 파일 경로가 주어진 경우: Read 도구로 파일 내용을 읽음
+- 코드가 직접 제공된 경우: 그대로 사용
+- 아무것도 주어지지 않은 경우: 사용자에게 리뷰할 코드나 파일을 요청
+- Bash로 `.gemini/review/{타임스탬프}_{대상}` 폴더 생성
+
+### Step 2: Gemini에게 리뷰 요청
+
+1. Write 도구로 코드를 저장:
+   - 경로: `{프로젝트루트}/.gemini/review/{타임스탬프}_{대상}/review_input.txt`
+   - 내용: 리뷰 대상 코드 (언어 정보 포함)
+
+2. Gemini CLI 호출 (1차 시도):
+```bash
+cat {경로}/review_input.txt | gemini -m gemini-3-pro-preview -p "다음 코드를 리뷰해주세요. 다음 관점에서 검토해주세요: 1. 버그 및 엣지케이스 2. 성능 최적화 3. 코드 가독성 4. 보안 이슈. 발견된 문제마다 심각도(높음/중간/낮음)를 표시하고 구체적인 개선안을 제시해주세요. ultrathink" -o json
+```
+
+3. 실패 시 2차 시도 + 사용자 알림:
+```bash
+cat {경로}/review_input.txt | gemini -m gemini-3-flash-preview -p "다음 코드를 리뷰해주세요. 다음 관점에서 검토해주세요: 1. 버그 및 엣지케이스 2. 성능 최적화 3. 코드 가독성 4. 보안 이슈. 발견된 문제마다 심각도(높음/중간/낮음)를 표시하고 구체적인 개선안을 제시해주세요. ultrathink" -o json
+```
+```
+⚠️ 모델 변경 알림: gemini-3-pro-preview 호출 실패로 gemini-3-flash-preview로 전환하여 진행합니다.
+```
+
+4. 응답 처리:
+   - JSON 응답에서 `response` 필드 추출
+   - `response` 내용을 `review_gemini.md`로 저장
+
+### Step 3: Claude 검토 (핵심 단계)
+
+Gemini의 각 피드백 항목에 대해 Claude가 검토:
+
+**검토 기준:**
+1. **코드 맥락 이해**: Claude가 해당 코드를 왜 그렇게 작성했는지 (또는 기존 코드의 의도)
+2. **프로젝트 컨벤션**: 프로젝트의 기존 스타일/패턴과 일치 여부
+3. **기술적 정확성**: Gemini 지적이 기술적으로 맞는지
+4. **실제 영향도**: 지적된 문제가 실제로 문제가 되는지
+
+**검토 결과 분류:**
+
+| 분류 | 설명 | 조치 |
+|------|------|------|
+| ✅ 동의 | 타당한 지적, 수정 필요 | 최종 리포트에 포함 |
+| ❌ 반박 | 의도적이거나 Gemini 오해 | 최종 리포트에서 제외, 이유 기록 |
+| ⚠️ 부분동의 | 일부만 맞음 | 수정된 형태로 최종 리포트에 포함 |
+
+검토 결과를 `review_claude_decision.md`에 저장:
+```markdown
+## Claude 검토 결과
+
+### ✅ 동의 (수정 권장)
+1. **[Gemini 지적 1]**
+   - Claude 의견: 타당함. 이 부분은 실제로 문제가 될 수 있음.
+
+### ❌ 반박 (수정 불필요)
+1. **[Gemini 지적 2]**
+   - Gemini 의견: "예외 처리 필요"
+   - Claude 반박: 이 함수는 의도적으로 예외를 상위로 전파함. 호출부에서 처리하는 설계.
+
+### ⚠️ 부분동의
+1. **[Gemini 지적 3]**
+   - Gemini 의견: "전체 리팩토링 필요"
+   - Claude 의견: 변수명 개선만 필요. 전체 구조는 적절함.
+```
+
+### Step 4: 최종 결과 정리
+
+`review_final.md` 생성 (사용자에게 전달할 내용):
+
+```markdown
+## Gemini 코드 리뷰 + Claude 검증 결과
+
+{Fallback 발생 시 아래 알림 포함}
+⚠️ 모델 변경 알림: gemini-3-pro-preview 호출 실패로 gemini-3-flash-preview로 전환하여 진행했습니다.
+
+### 사용된 모델
+- {실제 사용된 모델명}
+
+### 리뷰 대상
+- 파일: [파일명]
+- 라인 수: [N줄]
+
+### 검증된 이슈 (수정 권장)
+
+#### 심각도: 높음
+1. **[이슈 제목]** (라인 N)
+   - 문제: [설명]
+   - 제안: [해결책]
+   - Claude 검증: ✅ 동의
+
+#### 심각도: 중간
+1. **[이슈 제목]** (라인 N)
+   - 문제: [설명]
+   - 제안: [해결책]
+   - Claude 검증: ✅ 동의
+
+#### 심각도: 낮음 (권장사항)
+1. **[이슈 제목]**
+   - 제안: [개선안]
+   - Claude 검증: ⚠️ 부분동의 - [수정된 제안]
+
+### 기각된 지적 (참고용)
+1. **[Gemini 지적]**
+   - Claude 반박: [이유]
+
+### 요약
+- Gemini 지적 사항: N개
+- Claude 동의 (수정 권장): N개
+- Claude 반박 (수정 불필요): N개
+- 부분동의: N개
+
+### 산출물 위치
+- 입력: `.gemini/review/{타임스탬프}_{대상}/review_input.txt`
+- Gemini 원본: `.gemini/review/{타임스탬프}_{대상}/review_gemini.md`
+- Claude 검토: `.gemini/review/{타임스탬프}_{대상}/review_claude_decision.md`
+- 최종 결과: `.gemini/review/{타임스탬프}_{대상}/review_final.md`
+```
+
+## Claude의 후속 조치
+
+리뷰 결과에 따라:
+1. **동의한 심각한 버그**: 사용자에게 즉시 수정 제안
+2. **동의한 성능 이슈**: 사용자에게 수정 여부 확인
+3. **반박한 지적**: 이유 설명 후 넘어감
+4. **부분동의**: 수정된 제안으로 안내
+
+## 활용 예시
+
+### 파일 리뷰
+```
+src/utils/parser.py 파일을 Gemini로 리뷰해줘
+```
+
+### 특정 함수 리뷰
+```
+이 함수를 Gemini한테 검토받아줘:
+def calculate_ndvi(nir, red):
+    return (nir - red) / (nir + red)
+```
+
+### 변경사항 리뷰
+```
+방금 수정한 코드를 Gemini로 리뷰해줘
+```
+
+## 에러 발생 시 대체 처리
+
+1. **1차 실패** (`gemini-3-pro-preview`): `gemini-3-flash-preview`로 재시도 + 사용자 알림
+2. **2차 실패** (`gemini-3-flash-preview`): Claude가 단독으로 코드 리뷰 수행
+3. **파일 작성 실패**: 사용자에게 알리고 대체 방안 모색
+
+## 주의사항
+
+- 코드가 너무 긴 경우 핵심 부분만 선별하여 전달
+- Claude 검토 단계에서 코드의 원래 의도를 파악하기 위해 주변 코드도 확인
+- 리뷰 결과 적용 여부는 항상 사용자에게 확인
+- Gemini와 Claude 의견이 다를 경우, 근거와 함께 사용자에게 판단 요청
+- **모델 Fallback 발생 시 반드시 사용자에게 알림**

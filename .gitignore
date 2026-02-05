@@ -1,0 +1,19 @@
+# Gemini 작업 산출물 (사용자별로 생성됨)
+.gemini/
+
+# Claude Code 로컬 설정
+.claude/
+
+# OS 생성 파일
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 임시 파일
+*.tmp
+*.temp
