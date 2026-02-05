@@ -33,13 +33,25 @@ Claude Code와 Gemini CLI를 연동하여 두 AI가 협업하는 스킬 모음�
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-gemini-skills.git
+git clone https://github.com/dbaek-star/claude-gemini-skills.git
 cd claude-gemini-skills
 ```
 
-### 2. 스킬 파일 복사
+### 2. 설치 스크립트 실행
 
-각 스킬 폴더의 `SKILL.md` 파일을 Claude Code 스킬 디렉토리에 복사합니다.
+**Windows (PowerShell):**
+```powershell
+.\install.ps1
+```
+
+**macOS / Linux:**
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+<details>
+<summary>수동 설치 (스크립트 없이)</summary>
 
 **Windows:**
 ```powershell
@@ -58,7 +70,6 @@ Copy-Item "skills\gemini-review\SKILL.md" "$env:USERPROFILE\.claude\skills\gemin
 
 **macOS / Linux:**
 ```bash
-# 스킬 디렉토리 생성 및 파일 복사
 mkdir -p ~/.claude/skills/gemini-{collab,discuss,research,review}
 
 cp skills/gemini-collab/SKILL.md ~/.claude/skills/gemini-collab/
@@ -66,6 +77,8 @@ cp skills/gemini-discuss/SKILL.md ~/.claude/skills/gemini-discuss/
 cp skills/gemini-research/SKILL.md ~/.claude/skills/gemini-research/
 cp skills/gemini-review/SKILL.md ~/.claude/skills/gemini-review/
 ```
+
+</details>
 
 ### 3. Gemini CLI 설정
 
