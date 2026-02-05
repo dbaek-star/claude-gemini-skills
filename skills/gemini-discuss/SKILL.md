@@ -6,7 +6,7 @@ description: |
   or wants Claude and Gemini to discuss a topic and compare perspectives.
   Provides a workflow for collecting information through discussion with Gemini.
   Runs in Subagent mode for token optimization.
-version: 3.1.0
+version: 4.0.0
 allowed-tools: [Task, Read, Write, Bash, Glob, Grep]
 ---
 
@@ -15,12 +15,16 @@ allowed-tools: [Task, Read, Write, Bash, Glob, Grep]
 Gemini CLI와 특정 주제에 대해 논의하고 정보를 수집하는 스킬입니다.
 **Subagent에서 실행되어 메인 컨텍스트 토큰을 절약합니다.**
 
-## 핵심 변경사항 (v3.1.0)
+## 핵심 변경사항 (v4.0.0)
 
 1. **모델 선택**: 기본 `gemini-3-pro-preview` 사용, 실패 시 `gemini-3-flash-preview`로 자동 전환
 2. **Subagent 실행**: 전체 토론 과정이 Subagent에서 진행되고, 요약된 결론만 메인에 반환
 3. **Claude 검토 강화**: Gemini 의견을 단순 수집이 아닌, 검증 및 반론 포함
 4. **토큰 최적화**: 메인 컨텍스트에 ~1,500 토큰만 사용 (기존 ~7,000 토큰에서 78% 절감)
+5. **[NEW] 3라운드 토론**: 기존 최대 2라운드 → 3라운드로 확장 (더 깊은 토론)
+6. **[NEW] 결론 형식 개선**: 합의점/논쟁점/미결정 사항 분리
+7. **[NEW] 조기 종료**: 합의 도달 시 라운드 제한 전 종료
+8. **[NEW] 진행 상황 표시**: 각 단계별 텍스트 출력
 
 ## Gemini 모델 선택 규칙
 
@@ -137,7 +141,10 @@ Task 도구 사용:
 │  Step 1: 초기 질문                                           │
 │  - 주제/질문 → `discuss_input.txt` 저장                      │
 │  - Gemini 호출 (새 세션, -m gemini-3-pro-preview)            │
+│  - 실패 시 gemini-3-flash-preview로 재시도                   │
+│  - 둘 다 실패 시 Claude 단독 의견 제시 + 품질 경고           │
 │  - Gemini 응답 → `discuss_gemini_1.md` 저장                  │
+│  - 진행 상황: "[1/5] Gemini 의견 수집 중..."                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 2: Claude 검토                                         │
 │  - Gemini 의견 각 포인트별 검토:                              │
@@ -146,17 +153,25 @@ Task 도구 사용:
 │    → 보완: 누락된 정보 추가                                   │
 │    → 질문: 명확하지 않은 부분 지적                            │
 │  - 검토 결과 → `discuss_claude_review_1.md` 저장             │
+│  - 진행 상황: "[2/5] Claude 검토 중..."                      │
 ├─────────────────────────────────────────────────────────────┤
-│  Step 3: 후속 토론 (필요시, 최대 2라운드)                     │
+│  Step 3: 후속 토론 (필요시, 최대 3라운드) [UPDATED]          │
 │  - Claude 반론/질문 → `discuss_followup_N.txt` 저장          │
 │  - Gemini 호출 (--resume latest)                             │
 │  - Gemini 응답 → `discuss_gemini_N.md` 저장                  │
 │  - Claude 재검토 → `discuss_claude_review_N.md` 저장         │
+│  - 합의 도달 시 조기 종료 [NEW]                              │
+│  - 진행 상황: "[3/5] 토론 라운드 N/3..."                     │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 4: 결론 도출                                           │
-│  - 공통점과 차이점 정리                                       │
+│  - 합의점/논쟁점/미결정 분리 정리 [NEW]                      │
 │  - 종합 결론 및 권장사항 → `discuss_conclusion.md` 저장       │
+│  - .gemini/context.md 업데이트                               │
+│  - 진행 상황: "[4/5] 결론 도출 중..."                        │
+├─────────────────────────────────────────────────────────────┤
+│  Step 5: 요약 생성                                           │
 │  - 요약 생성 → `discuss_summary.md` 저장                     │
+│  - 진행 상황: "[5/5] 토론 완료!"                             │
 └─────────────────────────────────────────────────────────────┘
                               ↓
                     discuss_summary.md 반환
@@ -210,8 +225,19 @@ Gemini 의견의 각 포인트에 대해:
 
 검토 결과 → `discuss_claude_review_1.md` 저장
 
-### 4. Step 3: 후속 토론 (이견이 있는 경우)
-Claude가 반박하거나 질문한 내용이 있으면:
+### 4. Step 3: 후속 토론 (이견이 있는 경우, 최대 3라운드) [UPDATED]
+
+1. 진행 상황 출력:
+```
+[3/5] 토론 라운드 N/3...
+```
+
+2. **조기 종료 조건 [NEW]:**
+- 모든 주요 포인트에서 합의 도달
+- Claude가 더 이상 반박/질문이 없음
+- "합의 도달로 토론을 조기 종료합니다."
+
+3. Claude가 반박하거나 질문한 내용이 있으면:
 1. 반론/질문 → `discuss_followup_1.txt` 저장
 2. Gemini 호출:
    ```bash
@@ -224,13 +250,39 @@ Claude가 반박하거나 질문한 내용이 있으면:
 3. 응답 → `discuss_gemini_2.md` 저장
 4. Claude 재검토 → `discuss_claude_review_2.md` 저장
 
-(최대 2라운드까지)
+(최대 3라운드까지, 합의 시 조기 종료)
 
 ### 5. Step 4: 결론 도출
-`discuss_conclusion.md` 생성:
+
+1. 진행 상황 출력:
+```
+[4/5] 결론 도출 중...
+```
+
+2. `discuss_conclusion.md` 생성 (개선된 형식 [NEW]):
 ```markdown
 ## 주제
 {토론 주제}
+
+## 토론 요약
+- 총 라운드: {N}회
+- 조기 종료: {예/아니오} (사유: 합의 도달 / 라운드 제한)
+
+## ✅ 합의점 (Agreements)
+두 AI가 동의한 사항:
+1. {합의 사항 1}
+2. {합의 사항 2}
+
+## ⚔️ 논쟁점 (Disagreements)
+의견이 갈린 사항:
+1. **{주제}**
+   - Gemini: {의견}
+   - Claude: {의견}
+   - 근거 비교: {분석}
+
+## ❓ 미결정 사항 (Unresolved)
+추가 정보가 필요한 사항:
+1. {미결정 사항} - 필요한 정보: {설명}
 
 ## Gemini 주요 의견
 - {핵심 포인트 1}
@@ -240,17 +292,19 @@ Claude가 반박하거나 질문한 내용이 있으면:
 - {핵심 포인트 1}
 - {핵심 포인트 2}
 
-## 공통점
-- {합의된 사항}
-
-## 이견
-- Gemini: {의견} ↔ Claude: {의견}
-
 ## 종합 결론
 {두 AI의 의견을 종합한 최종 결론}
 
 ## 권장사항
 {사용자에게 권장하는 행동}
+- 합의점 기반: {행동 1}
+- 논쟁점 관련: {추가 조사 또는 사용자 판단 필요}
+```
+
+3. `.gemini/context.md` 업데이트:
+```markdown
+## 최근 토론 (discuss)
+- {날짜}: {주제} → 합의: {N}개, 논쟁: {N}개
 ```
 
 ### 6. 요약 생성
@@ -341,8 +395,8 @@ asyncio를 기본으로 사용하되, CPU-bound 작업은 ProcessPoolExecutor와
 
 ## 주의사항
 
-- 토론이 3라운드 이상 진행되지 않도록 제한
-- 결론이 나오면 즉시 종료
+- 토론이 최대 3라운드까지 진행 (이전 2라운드에서 확장)
+- 합의 도달 시 즉시 조기 종료
 - 상세 과정은 모두 파일로 저장되어 나중에 확인 가능
 - Subagent 실행 중에는 사용자 개입이 어려움
 - **모델 Fallback 발생 시 반드시 사용자에게 알림**

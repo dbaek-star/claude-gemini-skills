@@ -5,20 +5,24 @@ description: |
   "Gemini로 조사", "기술 조사해줘", "라이브러리 비교해줘", "알고리즘 탐색",
   "사전 조사", "best practice 찾아줘", or needs technical research before implementation.
   Provides a workflow for conducting technical research using Gemini CLI with Claude verification.
-version: 3.1.0
-allowed-tools: [Read, Write, Bash, Glob, Grep]
+version: 4.0.0
+allowed-tools: [Read, Write, Bash, Glob, Grep, AskUserQuestion]
 ---
 
 # Gemini Research (with Claude Verification)
 
 Gemini CLI를 활용하여 기술 조사를 수행하고, **Claude가 결과를 검증/보완**하는 스킬입니다.
 
-## 핵심 변경사항 (v3.1.0)
+## 핵심 변경사항 (v4.0.0)
 
 1. **모델 선택**: 기본 `gemini-3-pro-preview` 사용, 실패 시 `gemini-3-flash-preview`로 자동 전환
 2. **Claude 검증 단계**: Gemini 조사 결과를 그대로 전달하지 않고, Claude가 정확성 검증 및 누락 정보 보완
 3. **신뢰도 향상**: 잘못된 정보나 오래된 정보 필터링
 4. **메인 컨텍스트 실행**: 1~2회 호출로 끝나므로 Subagent 오버헤드 불필요
+5. **[NEW] 기존 조사 캐싱**: 유사 주제 조사 존재 시 재활용 여부 확인
+6. **[NEW] 출처 신뢰도**: 공식문서/블로그/기타로 출처 분류
+7. **[NEW] 진행 상황 표시**: 각 단계별 텍스트 출력
+8. **[NEW] 크로스-스킬 컨텍스트**: `.gemini/context.md` 연동
 
 ## Gemini 모델 선택 규칙
 
@@ -111,15 +115,24 @@ cat {파일} | gemini -m gemini-3-flash-preview -p "{프롬프트} ultrathink" -
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
+│  Step 0: 기존 조사 확인 [NEW]                                │
+│  - .gemini/research/ 폴더에서 유사 주제 검색                 │
+│  - 유사 조사 존재 시 AskUserQuestion:                        │
+│    [1] 새로 조사  [2] 기존 결과 활용  [3] 기존 + 추가 조사   │
+│  - 진행 상황: "[1/6] 기존 조사 확인 중..."                   │
+├─────────────────────────────────────────────────────────────┤
 │  Step 1: 조사 질문 구성                                      │
 │  - 사용자 요청을 구체적인 질문으로 변환                       │
 │  - 출력 폴더 생성                                            │
 │  - 질문 → `research_input.txt` 저장                         │
+│  - 진행 상황: "[2/6] 조사 질문 구성 중..."                   │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 2: Gemini 조사                                         │
 │  - Gemini CLI 호출 (-m gemini-3-pro-preview)                │
 │  - 실패 시 -m gemini-3-flash-preview로 재시도               │
+│  - 둘 다 실패 시 Claude 단독 조사 + 품질 경고                │
 │  - Gemini 응답 → `research_gemini.md` 저장                  │
+│  - 진행 상황: "[3/6] Gemini 조사 요청 중..."                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 3: Claude 검증 (핵심 단계)                             │
 │  - Gemini 조사 결과 각 항목별 검토:                          │
@@ -127,22 +140,53 @@ cat {파일} | gemini -m gemini-3-flash-preview -p "{프롬프트} ultrathink" -
 │    → 수정: 부정확하거나 오래된 정보 교정                      │
 │    → 보완: 누락된 중요 정보 추가                             │
 │    → 주의: 검증 불가능한 정보 표시                           │
+│  - 출처 신뢰도 분류: 📚공식문서 / 📝블로그 / ❓기타          │
 │  - 검증 결과 → `research_claude_verification.md` 저장        │
+│  - 진행 상황: "[4/6] Claude 검증 중..."                      │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 4: 후속 조사 (필요시)                                  │
 │  - 누락된 정보가 많거나 심화 필요시                          │
 │  - 후속 질문 → `research_followup.txt` 저장                 │
 │  - Gemini 호출 (--resume latest)                             │
 │  - 응답 → `research_followup_gemini.md` 저장                │
+│  - 진행 상황: "[5/6] 후속 조사 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 5: 최종 결과 정리                                      │
 │  - 검증된 조사 결과 종합                                     │
+│  - 비교 요청인 경우 자동 비교 표 생성                        │
 │  - 최종 결과 → `research_final.md` 저장                     │
+│  - .gemini/context.md 업데이트 (크로스-스킬 컨텍스트)        │
 │  - 사용자에게 결과 전달                                      │
+│  - 진행 상황: "[6/6] 결과 정리 완료!"                        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## 실행 절차
+
+### Step 0: 기존 조사 확인 [NEW]
+
+1. 진행 상황 출력:
+```
+[gemini-research] 조사 시작...
+[1/6] 기존 조사 확인 중...
+```
+
+2. Glob 도구로 `.gemini/research/` 폴더 검색
+3. 유사 주제 존재 시 AskUserQuestion 호출:
+```
+이전에 유사한 조사가 있습니다:
+- 2026-02-03: "Python 비동기 처리" (.gemini/research/20260203_...)
+
+어떻게 진행할까요?
+[1] 새로 조사 (기존 무시)
+[2] 기존 결과 활용 (조사 생략)
+[3] 기존 + 추가 조사 (보완)
+```
+
+4. 선택에 따라:
+   - [1]: 새 조사 진행
+   - [2]: 기존 `research_final.md` 반환
+   - [3]: 기존 결과 참조하며 추가 조사
 
 ### Step 1: 조사 질문 구성 및 Gemini 호출
 
@@ -189,6 +233,14 @@ Gemini 조사 결과의 각 항목에 대해 Claude가 검증:
 | ➕ 보완 | 누락된 중요 정보 | Claude가 추가 |
 | ⚠️ 주의 | 검증 불가 | 주의 표시와 함께 포함 |
 
+**출처 신뢰도 분류 [NEW]:**
+
+| 분류 | 설명 | 표시 |
+|------|------|------|
+| 📚 공식문서 | 공식 문서, RFC, 표준 | 높은 신뢰도 |
+| 📝 블로그/튜토리얼 | 기술 블로그, 개인 글 | 중간 신뢰도 |
+| ❓ 기타/불명 | 출처 불분명 | 검증 필요 |
+
 검증 결과를 `research_claude_verification.md`에 저장:
 ```markdown
 ## Claude 검증 결과
@@ -234,6 +286,27 @@ cat {경로}/research_followup.txt | gemini -m gemini-3-flash-preview -p "웹 �
 5. Claude 추가 검증
 
 ### Step 4: 최종 결과 정리
+
+1. 진행 상황 출력:
+```
+[6/6] 결과 정리 완료!
+```
+
+2. 비교 요청인 경우 자동 비교 표 생성 [NEW]:
+```markdown
+### 비교 분석
+| 항목 | 옵션 A | 옵션 B | 옵션 C |
+|------|--------|--------|--------|
+| 성능 | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ |
+| 학습곡선 | 낮음 | 중간 | 높음 |
+| 커뮤니티 | 활발 | 보통 | 활발 |
+```
+
+3. `.gemini/context.md` 업데이트 [NEW]:
+```markdown
+## 최근 조사 (research)
+- {날짜}: {주제} → {핵심 결론 한 줄}
+```
 
 `research_final.md` 생성 (사용자에게 전달할 내용):
 

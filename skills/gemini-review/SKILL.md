@@ -5,20 +5,25 @@ description: |
   "Gemini로 코드 리뷰", "Gemini한테 코드 검토", "AI 코드 리뷰",
   "버그 찾아줘 Gemini", or wants Gemini to review code for bugs, performance, and style issues.
   Provides a workflow for code review using Gemini CLI with Claude verification.
-version: 3.1.0
-allowed-tools: [Read, Write, Edit, Bash, Glob, Grep]
+version: 4.0.0
+allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 ---
 
 # Gemini Code Review (with Claude Verification)
 
 Gemini CLI를 호출하여 코드 리뷰를 수행하고, **Claude가 결과를 검토하여 동의/반박**하는 스킬입니다.
 
-## 핵심 변경사항 (v3.1.0)
+## 핵심 변경사항 (v4.0.0)
 
 1. **모델 선택**: 기본 `gemini-3-pro-preview` 사용, 실패 시 `gemini-3-flash-preview`로 자동 전환
 2. **Claude 검토 단계**: Gemini 피드백을 그대로 전달하지 않고, Claude가 각 지적에 대해 동의/반박/부분동의 판단
 3. **검증된 결과만 전달**: 잘못된 지적이나 맥락을 모르는 피드백 필터링
 4. **메인 컨텍스트 실행**: 단일 호출로 끝나므로 Subagent 오버헤드 불필요
+5. **[NEW] 다중 파일 리뷰**: 디렉토리 지정 시 여러 파일 순차 리뷰 + 통합 리포트
+6. **[NEW] 심각도 분류 개선**: Critical/Major/Minor/Info 4단계 분류
+7. **[NEW] 즉시 수정 제안**: Critical 이슈 발견 시 AskUserQuestion으로 즉시 수정 제안
+8. **[NEW] Diff 형식 제안**: 수정 제안을 코드 스니펫(diff)으로 제공
+9. **[NEW] 진행 상황 표시**: 각 단계별 텍스트 출력
 
 ## Gemini 모델 선택 규칙
 
@@ -105,37 +110,70 @@ cat {파일} | gemini -m gemini-3-flash-preview -p "{프롬프트} ultrathink" -
 ┌─────────────────────────────────────────────────────────────┐
 │  Step 1: 코드 준비                                           │
 │  - 파일 경로가 주어진 경우: Read 도구로 파일 읽기             │
+│  - 디렉토리가 주어진 경우: Glob으로 파일 목록 수집 [NEW]     │
 │  - 코드가 직접 제공된 경우: 그대로 사용                       │
 │  - 아무것도 주어지지 않은 경우: 사용자에게 요청               │
 │  - 출력 폴더 생성                                            │
+│  - 진행 상황: "[1/5] 코드 준비 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 2: Gemini 리뷰 요청                                    │
 │  - 코드 → `review_input.txt` 저장                           │
 │  - Gemini CLI 호출 (-m gemini-3-pro-preview)                │
 │  - 실패 시 -m gemini-3-flash-preview로 재시도               │
+│  - 둘 다 실패 시 Claude 단독 리뷰 + 품질 경고                │
 │  - Gemini 응답 → `review_gemini.md` 저장                    │
+│  - 다중 파일인 경우 파일별 반복 [NEW]                        │
+│  - 진행 상황: "[2/5] Gemini 리뷰 요청 중... (N/M 파일)"      │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 3: Claude 검토 (핵심 단계)                             │
 │  - Gemini 피드백 각 항목별 검토:                             │
 │    → 동의: "타당한 지적. 수정 권장."                         │
 │    → 반박: "이 코드는 의도적임. 이유: ..."                   │
 │    → 부분동의: "일부 수용. 다른 방식 제안: ..."              │
+│  - 심각도 분류: 🔴Critical / 🟠Major / 🟡Minor / 🔵Info [NEW]│
+│  - 수정 제안을 diff 형식으로 작성 [NEW]                      │
 │  - 검토 결과 → `review_claude_decision.md` 저장             │
+│  - 진행 상황: "[3/5] Claude 검토 중..."                      │
 ├─────────────────────────────────────────────────────────────┤
-│  Step 4: 최종 결과 정리                                      │
+│  Step 4: Critical 이슈 즉시 처리 [NEW]                       │
+│  - Critical 이슈 발견 시 AskUserQuestion 호출:               │
+│    "🔴 Critical 이슈 발견: [이슈 설명]"                      │
+│    [1] 지금 수정  [2] 나중에 수정  [3] 무시 (의도적)         │
+│  - [1] 선택 시 Edit 도구로 즉시 수정                         │
+│  - 진행 상황: "[4/5] Critical 이슈 처리 중..."               │
+├─────────────────────────────────────────────────────────────┤
+│  Step 5: 최종 결과 정리                                      │
 │  - 검증된 이슈만 포함한 최종 리포트 생성                      │
+│  - 다중 파일인 경우 통합 리포트 + 크로스-파일 이슈 분석 [NEW]│
 │  - 최종 결과 → `review_final.md` 저장                       │
+│  - .gemini/context.md 업데이트                               │
 │  - 사용자에게 결과 전달                                      │
+│  - 진행 상황: "[5/5] 리뷰 완료!"                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## 실행 절차
 
 ### Step 1: 코드 준비 및 출력 폴더 생성
+
+1. 진행 상황 출력:
+```
+[gemini-review] 코드 리뷰 시작...
+[1/5] 코드 준비 중...
+```
+
+2. 입력 처리:
 - 파일 경로가 주어진 경우: Read 도구로 파일 내용을 읽음
+- **디렉토리가 주어진 경우 [NEW]**: Glob으로 파일 목록 수집
+  ```
+  예: "src/utils/ 폴더 리뷰해줘"
+  → Glob("src/utils/**/*.py") 또는 Glob("src/utils/**/*.ts")
+  → 파일 목록 수집 (최대 10개, 초과 시 AskUserQuestion으로 선택)
+  ```
 - 코드가 직접 제공된 경우: 그대로 사용
 - 아무것도 주어지지 않은 경우: 사용자에게 리뷰할 코드나 파일을 요청
-- Bash로 `.gemini/review/{타임스탬프}_{대상}` 폴더 생성
+
+3. Bash로 `.gemini/review/{타임스탬프}_{대상}` 폴더 생성
 
 ### Step 2: Gemini에게 리뷰 요청
 
@@ -178,6 +216,21 @@ Gemini의 각 피드백 항목에 대해 Claude가 검토:
 | ❌ 반박 | 의도적이거나 Gemini 오해 | 최종 리포트에서 제외, 이유 기록 |
 | ⚠️ 부분동의 | 일부만 맞음 | 수정된 형태로 최종 리포트에 포함 |
 
+**심각도 분류 [NEW]:**
+
+| 심각도 | 설명 | 조치 |
+|--------|------|------|
+| 🔴 Critical | 보안 취약점, 데이터 손실, 크래시 유발 | AskUserQuestion으로 즉시 수정 제안 |
+| 🟠 Major | 버그, 성능 문제, 잘못된 로직 | 수정 강력 권장 |
+| 🟡 Minor | 코드 스타일, 가독성, 경미한 개선 | 수정 권장 |
+| 🔵 Info | 제안, 참고사항, best practice | 선택적 적용 |
+
+**Diff 형식 수정 제안 [NEW]:**
+```diff
+- cursor.execute(f"SELECT * FROM users WHERE id={user_id}")
++ cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+```
+
 검토 결과를 `review_claude_decision.md`에 저장:
 ```markdown
 ## Claude 검토 결과
@@ -197,7 +250,56 @@ Gemini의 각 피드백 항목에 대해 Claude가 검토:
    - Claude 의견: 변수명 개선만 필요. 전체 구조는 적절함.
 ```
 
-### Step 4: 최종 결과 정리
+### Step 4: Critical 이슈 즉시 처리 [NEW]
+
+🔴 Critical 이슈가 발견된 경우:
+
+1. 진행 상황 출력:
+```
+[4/5] Critical 이슈 처리 중...
+```
+
+2. AskUserQuestion 호출:
+```
+🔴 Critical 이슈 발견!
+
+파일: src/utils/auth.py:42
+이슈: SQL Injection 취약점
+
+현재 코드:
+  cursor.execute(f"SELECT * FROM users WHERE id={user_id}")
+
+수정 제안:
+  cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+
+어떻게 처리할까요?
+[1] 지금 수정 (Edit 도구로 즉시 적용)
+[2] 나중에 수정 (리포트에 기록)
+[3] 무시 (의도적인 코드)
+```
+
+3. [1] 선택 시:
+- Edit 도구로 해당 코드 수정
+- 수정 결과 기록
+
+4. 모든 Critical 이슈에 대해 반복
+
+### Step 5: 최종 결과 정리
+
+1. 진행 상황 출력:
+```
+[5/5] 리뷰 완료!
+```
+
+2. 다중 파일인 경우 통합 리포트 생성 [NEW]:
+```markdown
+### 크로스-파일 분석
+- 중복 코드: utils.py:10 ↔ helpers.py:25
+- 순환 의존성: module_a → module_b → module_a
+- 미사용 import: 3개 파일에서 발견
+```
+
+3. `.gemini/context.md` 업데이트
 
 `review_final.md` 생성 (사용자에게 전달할 내용):
 

@@ -178,6 +178,19 @@ Sentinel-2 영상에서 NDVI를 계산하는 Python 함수를 Gemini와 협업�
 
 ## 버전 정보
 
+**v4.0.0** (2026-02-05)
+
+- **[NEW] 기존 조사 캐싱**: research 스킬에서 유사 주제 재활용 여부 확인
+- **[NEW] 다중 파일 리뷰**: review 스킬에서 디렉토리 지정 시 여러 파일 순차 리뷰
+- **[NEW] 심각도 분류**: Critical/Major/Minor/Info 4단계 분류 (review)
+- **[NEW] 즉시 수정 제안**: Critical 이슈 발견 시 AskUserQuestion으로 즉시 수정 제안
+- **[NEW] 3라운드 토론**: discuss 스킬 최대 라운드 2→3 확장
+- **[NEW] 합의점/논쟁점 분리**: discuss 결론 형식 개선
+- **[NEW] 코드 적용 확인**: collab 스킬에서 코드 적용 전 사용자 확인
+- **[NEW] 테스트 실행 제안**: collab 완료 후 테스트 실행 여부 제안
+- **[NEW] 진행 상황 표시**: 모든 스킬에서 단계별 텍스트 출력
+- **[NEW] 크로스-스킬 컨텍스트**: `.gemini/context.md` 연동
+
 **v3.1.0** (2025-02-05)
 
 - 모델 선택: `gemini-3-pro-preview` 기본, `gemini-3-flash-preview` fallback

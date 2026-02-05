@@ -6,8 +6,8 @@ description: |
   "Gemini와 함께 개발", or discusses collaborative coding between Claude and Gemini.
   Provides a workflow for Claude Code and Gemini to collaborate on code writing.
   Runs in Subagent mode for token optimization.
-version: 3.1.0
-allowed-tools: [Task, Read, Write, Edit, Bash, Glob, Grep]
+version: 4.0.0
+allowed-tools: [Task, Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 ---
 
 # Gemini Collaborative Coding (Subagent Version)
@@ -15,12 +15,16 @@ allowed-tools: [Task, Read, Write, Edit, Bash, Glob, Grep]
 Claude Code와 Gemini가 협업하여 코드를 작성하는 스킬입니다.
 **Subagent에서 실행되어 메인 컨텍스트 토큰을 절약합니다.**
 
-## 핵심 변경사항 (v3.1.0)
+## 핵심 변경사항 (v4.0.0)
 
 1. **모델 선택**: 기본 `gemini-3-pro-preview` 사용, 실패 시 `gemini-3-flash-preview`로 자동 전환
 2. **Subagent 실행**: 전체 협업 과정이 Subagent에서 진행되고, 요약된 결과만 메인에 반환
 3. **Claude 검토 단계**: Gemini 피드백을 Claude가 검토하여 동의/반박 후 선택적 반영
 4. **토큰 최적화**: 메인 컨텍스트에 ~2,000 토큰만 사용 (기존 ~13,000 토큰에서 85% 절감)
+5. **[NEW] 코드 적용 전 확인**: AskUserQuestion으로 최종 코드 적용 여부 확인
+6. **[NEW] 테스트 실행 제안**: 코드 작성 후 테스트 실행 여부 제안
+7. **[NEW] Git 안내**: Git 환경에서 롤백 방법 안내
+8. **[NEW] 진행 상황 표시**: 각 단계별 텍스트 출력
 
 ## Gemini 모델 선택 규칙
 
@@ -131,10 +135,14 @@ Task 도구 사용:
 │  Phase 1: 설계 협의                                          │
 │  - Claude: 초기 설계안 제시                                   │
 │  - Gemini: 설계 검토 및 대안 제시                             │
+│  - 실패 시 gemini-3-flash-preview로 재시도                   │
+│  - 둘 다 실패 시 Claude 단독 설계 + 품질 경고                │
 │  - Claude: Gemini 의견 검토 (동의/반박) → 최종 설계 결정       │
+│  - 진행 상황: "[1/6] 설계 협의 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 2: 코드 작성                                          │
 │  - Claude: 합의된 설계 기반 코드 작성                         │
+│  - 진행 상황: "[2/6] 코드 작성 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 3: 코드 리뷰 + Claude 검토                            │
 │  - Gemini: 코드 리뷰 (버그, 성능, 보안, 가독성)               │
@@ -142,13 +150,22 @@ Task 도구 사용:
 │    → 동의: 수정 대상으로 표시                                 │
 │    → 반박: 이유 기록, 수정하지 않음                           │
 │    → 부분 동의: 수정된 방식으로 반영                          │
+│  - 진행 상황: "[3/6] 코드 리뷰 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 4: 선택적 수정                                        │
 │  - Claude: 동의한 피드백만 코드에 반영                        │
+│  - 진행 상황: "[4/6] 코드 수정 중..."                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Phase 5: 최종 검증                                          │
 │  - Gemini: 수정 사항 확인                                    │
 │  - 결과 요약 생성                                            │
+│  - 진행 상황: "[5/6] 최종 검증 중..."                        │
+├─────────────────────────────────────────────────────────────┤
+│  Phase 6: 코드 적용 확인 [NEW]                               │
+│  - AskUserQuestion: 코드 적용 여부 확인                      │
+│  - 테스트 실행 여부 제안                                     │
+│  - Git 환경 시 롤백 방법 안내                                │
+│  - 진행 상황: "[6/6] 협업 완료!"                             │
 └─────────────────────────────────────────────────────────────┘
                               ↓
                     collab_summary.md 반환
@@ -221,7 +238,12 @@ mkdir -p "{프로젝트루트}/.gemini/collab/{YYYYMMDD_HHMMSS}_{주제요약}"
 - 실제 파일에 코드 작성/수정
 
 ### 6. Phase 5: 최종 검증
-1. Gemini에게 최종 확인 요청:
+1. 진행 상황 출력:
+```
+[5/6] 최종 검증 중...
+```
+
+2. Gemini에게 최종 확인 요청:
    ```bash
    cat {경로}/collab_final_code.txt | gemini -m gemini-3-pro-preview -p "수정된 코드입니다. 이전 피드백이 잘 반영되었는지 확인해주세요. ultrathink" -o json --resume latest
    ```
@@ -229,9 +251,53 @@ mkdir -p "{프로젝트루트}/.gemini/collab/{YYYYMMDD_HHMMSS}_{주제요약}"
    ```bash
    cat {경로}/collab_final_code.txt | gemini -m gemini-3-flash-preview -p "수정된 코드입니다. 이전 피드백이 잘 반영되었는지 확인해주세요. ultrathink" -o json --resume latest
    ```
-2. 응답 → `collab_final_verification.md` 저장
+3. 응답 → `collab_final_verification.md` 저장
 
-### 7. 요약 생성
+### 7. Phase 6: 코드 적용 확인 [NEW]
+
+1. 진행 상황 출력:
+```
+[6/6] 협업 완료!
+```
+
+2. AskUserQuestion으로 코드 적용 여부 확인:
+```
+협업 코딩이 완료되었습니다.
+
+작성된 코드:
+- 파일: {파일 경로}
+- 주요 기능: {설명}
+
+Gemini 리뷰 결과:
+- 지적 사항: {N}개
+- Claude 동의: {N}개, 반박: {N}개
+
+어떻게 진행할까요?
+[1] 코드 적용 (파일에 저장)
+[2] 코드 확인 후 결정 (미리보기)
+[3] 적용 취소
+```
+
+3. [1] 선택 시:
+- Write/Edit 도구로 코드 적용
+- Git 환경 감지 시 안내:
+  ```
+  💡 Git 환경 감지됨
+  롤백이 필요한 경우: git checkout -- {파일경로}
+  ```
+
+4. 테스트 실행 제안:
+```
+코드가 적용되었습니다.
+
+테스트를 실행할까요?
+[1] 테스트 실행 (pytest / npm test 등)
+[2] 건너뛰기
+```
+
+5. `.gemini/context.md` 업데이트
+
+### 8. 요약 생성
 `collab_summary.md` 파일 생성 (이 내용이 메인 컨텍스트로 반환됨):
 
 ```markdown
