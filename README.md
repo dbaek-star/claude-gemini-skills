@@ -82,13 +82,17 @@ cp skills/gemini-review/SKILL.md ~/.claude/skills/gemini-review/
 
 ### 3. Gemini CLI 설정
 
+**Prerequisites:** Node.js 20 이상 필요
+
 ```bash
 # Gemini CLI 설치 (npm)
-npm install -g @anthropic/gemini-cli
+npm install -g @google/gemini-cli
 
-# 인증
-gemini auth login
+# 첫 실행 시 자동으로 인증 프로세스 시작
+gemini
 ```
+
+> 자세한 설치 방법: https://github.com/google-gemini/gemini-cli
 
 ## 사용법
 
